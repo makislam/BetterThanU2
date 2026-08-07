@@ -1,0 +1,27 @@
+# Dynamixel bus config for the 6 face motors, driven over a U2D2.
+#
+# id: Dynamixel ID on the bus.
+# key: keyboard key that jogs this motor CW one quarter turn.
+#      Shift+key (i.e. the uppercase letter) jogs it CCW.
+port: /dev/ttyUSB0
+baud_rate: 4000000
+protocol_version: 2.0
+
+# Ticks per revolution for X-series (XL430/XM430/etc, 12-bit encoder).
+ticks_per_rev: 4096
+
+# Degrees moved per keypress; converted to ticks using ticks_per_rev.
+step_degrees: 90
+
+# Dynamixel Extended Position Control profile (rad/s, rad/s^2).
+# 0 means "no limit" — motor moves at its max Velocity Limit / max accel.
+profile_velocity: 0
+profile_acceleration: 0
+
+motors:
+  U: {id: 1, key: u}
+  B: {id: 2, key: b}
+  R: {id: 3, key: r}
+  F: {id: 4, key: f}
+  L: {id: 5, key: l}
+  D: {id: 6, key: d}

@@ -1,0 +1,22 @@
+# Fixed identity of each face motor. The cube body never reorients in this
+# rig, so a motor's center-sticker color never changes and its solver face
+# letter (U/R/F/D/L/B) never changes either — both are permanent facts about
+# how the rig was built, not something chosen per run.
+#
+# color: the sticker color of the face that motor spins (its center sticker).
+# face: the solver-notation letter for that same face, matching the ROI
+#   layout in config/roi.yaml (which faces are visible from position_a vs
+#   position_b).
+#
+# This file isn't read by cube_state_node — it's the reference the robot's
+# motor-control code should use, kept next to the vision config since both
+# describe the same physical mapping. Edit face: values to match your actual
+# rig geometry (i.e. whichever face physically ended up "up" is U, etc.).
+
+motors:
+  1: {color: Y, face: D}
+  2: {color: O, face: L}
+  3: {color: G, face: F}
+  4: {color: R, face: R}
+  5: {color: B, face: B}
+  6: {color: W, face: U}

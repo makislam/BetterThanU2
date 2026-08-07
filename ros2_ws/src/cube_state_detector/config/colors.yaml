@@ -1,0 +1,14 @@
+# Reference color for each cube sticker color, in OpenCV HSV
+# (H: 0-179, S: 0-255, V: 0-255).
+#
+# These are rough starting values under normal indoor light. They will
+# not be exact for your camera and lighting. Follow the calibration steps
+# in README.md and replace these numbers with what you actually see.
+
+colors:
+  W: [0, 0, 200]     # white
+  Y: [28, 200, 200]  # yellow
+  R: [0, 200, 150]   # red
+  O: [12, 200, 200]  # orange
+  B: [110, 200, 150] # blue
+  G: [65, 200, 150]  # green

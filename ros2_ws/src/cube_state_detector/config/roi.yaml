@@ -1,0 +1,37 @@
+# Two fixed-ish cameras, each looking at 3 faces of the cube at once (the
+# cube never reorients — only individual faces spin, each on its own
+# motor). Cameras can be repositioned before every capture, so faces are
+# found by detecting the stickers themselves each shot (see
+# sticker_detect.py) instead of trusting fixed pixel coordinates.
+#
+# `faces` lists which face letters are visible from that position, ordered
+# top-to-bottom / left-to-right as they typically appear in a corner view
+# (e.g. for a top-front-right corner shot: top face above, front-left and
+# right-side below it). This ordering is what maps a detected sticker
+# cluster to a face identity — it only breaks if the camera is flipped to
+# a very different angle than the others, not by ordinary
+# repositioning/zoom. Edit to match what your rig's corner view actually
+# shows.
+
+positions:
+  position_a:
+    image_topic: /camera_a/color/image_raw
+    faces: [U, F, R]
+
+  position_b:
+    image_topic: /camera_b/color/image_raw
+    faces: [D, B, L]
+
+# Sticker-contour detection tuning. These almost certainly need adjusting
+# for your lighting/cube/camera distance — use the debug image
+# (/cube_state/debug_image/<position>) to see every candidate contour
+# (red) and which ones got grouped into a face (green) while tuning.
+detection:
+  blur_kernel: 5          # Gaussian blur kernel size before edge detection (odd)
+  canny_low: 50            # Canny edge detector lower threshold
+  canny_high: 150          # Canny edge detector upper threshold
+  min_sticker_area: 400    # px^2 - drop contours smaller than one sticker
+  max_sticker_area: 6000   # px^2 - drop contours bigger than one sticker
+  aspect_ratio_tolerance: 0.6  # min(w,h)/max(w,h) - stickers are ~square
+  cluster_distance_factor: 2.0  # group stickers within this many sticker-widths into one face
+  sample_patch_radius: 6   # px around a detected sticker's center to sample its color
