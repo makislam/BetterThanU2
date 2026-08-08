@@ -1,37 +1,41 @@
-# Two fixed-ish cameras, each looking at 3 faces of the cube at once (the
-# cube never reorients — only individual faces spin, each on its own
-# motor). Cameras can be repositioned before every capture, so faces are
-# found by detecting the stickers themselves each shot (see
-# sticker_detect.py) instead of trusting fixed pixel coordinates.
+# One face captured at a time, straight-on. The cube body never moves in
+# this rig (only individual faces spin, each on its own motor), and the
+# cube is stickerless (no dark sticker border between cubies to detect —
+# just a thin painted seam), so rather than seeing several faces at once
+# from a fixed oblique angle, reposition a camera (or the cube) before
+# each capture so exactly one face fills the frame, then call
+# capture_position with that face's letter.
 #
-# `faces` lists which face letters are visible from that position, ordered
-# top-to-bottom / left-to-right as they typically appear in a corner view
-# (e.g. for a top-front-right corner shot: top face above, front-left and
-# right-side below it). This ordering is what maps a detected sticker
-# cluster to a face identity — it only breaks if the camera is flipped to
-# a very different angle than the others, not by ordinary
-# repositioning/zoom. Edit to match what your rig's corner view actually
-# shows.
+# image_topic can point at either camera_a or camera_b — assign however
+# your physical setup actually uses the two cameras (e.g. one camera
+# handheld and repositioned for all 6 faces, or two cameras each covering
+# a subset without needing to move). Edit to match your rig.
 
 positions:
-  position_a:
+  U:
     image_topic: /camera_a/color/image_raw
-    faces: [U, F, R]
+  R:
+    image_topic: /camera_a/color/image_raw
+  F:
+    image_topic: /camera_a/color/image_raw
+  D:
+    image_topic: /camera_a/color/image_raw
+  L:
+    image_topic: /camera_a/color/image_raw
+  B:
+    image_topic: /camera_a/color/image_raw
 
-  position_b:
-    image_topic: /camera_b/color/image_raw
-    faces: [D, B, L]
-
-# Sticker-contour detection tuning. These almost certainly need adjusting
-# for your lighting/cube/camera distance — use the debug image
-# (/cube_state/debug_image/<position>) to see every candidate contour
-# (red) and which ones got grouped into a face (green) while tuning.
+# Face-square detection tuning. These almost certainly need adjusting for
+# your lighting/cube/camera distance — use the debug image
+# (/cube_state/debug_image/<face>) while tuning: it shows the
+# perspective-corrected face with its 3x3 grid and classified colors once
+# a face square is found, or the raw camera frame if none was found yet.
 detection:
-  blur_kernel: 5          # Gaussian blur kernel size before edge detection (odd)
-  canny_low: 50            # Canny edge detector lower threshold
-  canny_high: 150          # Canny edge detector upper threshold
-  min_sticker_area: 400    # px^2 - drop contours smaller than one sticker
-  max_sticker_area: 6000   # px^2 - drop contours bigger than one sticker
-  aspect_ratio_tolerance: 0.6  # min(w,h)/max(w,h) - stickers are ~square
-  cluster_distance_factor: 2.0  # group stickers within this many sticker-widths into one face
-  sample_patch_radius: 6   # px around a detected sticker's center to sample its color
+  blur_kernel: 5           # Gaussian blur kernel size before edge detection (odd)
+  canny_low: 30            # Canny edge detector lower threshold
+  canny_high: 90           # Canny edge detector upper threshold
+  min_face_area: 100000    # px^2 - drop contours smaller than the whole face
+  max_face_area: 3000000   # px^2 - drop contours bigger than the whole face
+  aspect_ratio_tolerance: 0.6  # min(w,h)/max(w,h) - a face is ~square
+  warp_size: 300           # px - size of the perspective-corrected square image
+  sample_patch_radius: 8   # px around each grid cell's center to sample its color

@@ -1,0 +1,8 @@
+string[] moves
+---
+bool success
+string message
+int32 moves_completed
+---
+int32 move_index
+string move

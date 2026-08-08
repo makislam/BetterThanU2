@@ -3,3 +3,15 @@ ros2_ws/install/
 ros2_ws/log/
 __pycache__/
 *.pyc
+
+# Machine-specific venvs — recreate locally from requirements.txt/rosdep.
+ros2_ws/.venv/
+cube_vision_tool/.venv/
+
+# cube_vision_tool: capture data grows every session, kept out of git.
+cube_vision_tool/dataset/
+
+# Debug/scratch images from vision-tool development, regenerable.
+cube_vision_tool/zoom_*.png
+cube_vision_tool/state_comparison.png
+cube_vision_tool/state_net.png

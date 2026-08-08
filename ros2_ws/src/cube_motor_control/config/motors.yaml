@@ -18,6 +18,15 @@ step_degrees: 90
 profile_velocity: 0
 profile_acceleration: 0
 
+# false: skip position read-back/settle/tolerance checks on every move and
+# just command turns open-loop with a fixed settle delay. Moves are
+# reliable enough on this rig that occasional transient bus read failures
+# aborting an otherwise-fine solve (requiring a manual resume/restart) was
+# worse than the risk of an undetected slip. Set back to true to restore
+# full per-move verification.
+verify_moves: false
+unverified_move_settle_s: 0.4
+
 motors:
   U: {id: 1, key: u}
   B: {id: 2, key: b}

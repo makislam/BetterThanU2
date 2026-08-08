@@ -1,20 +1,17 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>cube_motor_control</name>
+  <name>cube_solver</name>
   <version>0.1.0</version>
-  <description>Keyboard teleop for the Rubik's Cube rig's 6 Dynamixel face motors.</description>
+  <description>Pluggable cube-solving backends that turn a facelet state into moves and drive them through the motor rig.</description>
   <maintainer email="makis@futurhandrobotics.com">Makis</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
-  <depend>ament_index_python</depend>
   <depend>cube_solver_interfaces</depend>
-  <depend>std_srvs</depend>
-
-  <exec_depend>python3-yaml</exec_depend>
+  <depend>cube_motor_control</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -4,10 +4,12 @@ Depth is turned off since this node only needs color images. Each camera
 needs a distinct camera_name/serial_no so their topics don't collide —
 fill in serial_no with each device's actual serial (`rs-enumerate-devices`).
 
-camera_namespace is set to "" so topics come out as /camera_a/color/image_raw
-and /camera_b/color/image_raw (matching config/roi.yaml's image_topic
-entries), instead of the driver's default doubled-up
-/camera_a/camera_a/color/image_raw.
+camera_namespace is set to "" to avoid the driver's default doubled-up
+/camera_a/camera_a/color/image_raw, but this RealSense ROS build still
+publishes under a hardcoded /camera/<camera_name>/... namespace regardless.
+Explicit remappings below force the output onto /camera_a/color/image_raw
+and /camera_b/color/image_raw to match config/roi.yaml's image_topic
+entries.
 """
 
 from launch import LaunchDescription
@@ -23,13 +25,16 @@ def generate_launch_description():
             {
                 "camera_name": "camera_a",
                 "camera_namespace": "",
-                "serial_no": "",  # TODO: fill in this camera's serial number
+                "serial_no": "352122271777",
                 "enable_color": True,
                 "enable_depth": False,
                 "enable_infra1": False,
                 "enable_infra2": False,
                 "align_depth.enable": False,
             }
+        ],
+        remappings=[
+            ("/camera/camera_a/color/image_raw", "/camera_a/color/image_raw"),
         ],
     )
 
@@ -41,13 +46,16 @@ def generate_launch_description():
             {
                 "camera_name": "camera_b",
                 "camera_namespace": "",
-                "serial_no": "",  # TODO: fill in this camera's serial number
+                "serial_no": "130322270378",
                 "enable_color": True,
                 "enable_depth": False,
                 "enable_infra1": False,
                 "enable_infra2": False,
                 "align_depth.enable": False,
             }
+        ],
+        remappings=[
+            ("/camera/camera_b/color/image_raw", "/camera_b/color/image_raw"),
         ],
     )
 

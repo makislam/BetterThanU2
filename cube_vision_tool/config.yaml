@@ -1,0 +1,42 @@
+# Cube vision tool config — capture, labeling, and dataset paths.
+# Nothing about color CLASSIFICATION lives here — labeling is 100% manual
+# keypresses. The palette below is only for display (which key means which
+# color, and what swatch color to draw for it).
+
+palette:
+  # key: [color_label, display_rgb]
+  y: {label: Y, rgb: [255, 220, 0]}    # yellow
+  r: {label: R, rgb: [200, 30, 30]}    # red
+  g: {label: G, rgb: [30, 160, 60]}    # green
+  o: {label: O, rgb: [255, 140, 0]}    # orange
+  b: {label: B, rgb: [30, 80, 200]}    # blue
+  w: {label: W, rgb: [235, 235, 235]}  # white
+  u: {label: U, rgb: [120, 120, 120]}  # unknown / occluded
+
+key_bindings:
+  undo: z
+  save: s
+  next_face: Tab
+
+capture:
+  slots: [upper_corner, lower_corner]
+  width: 1280
+  height: 720
+  # D405's color stream only supports 15/10/5 Hz at 1280x720 (no 30) -
+  # pipeline.start() raises "Couldn't resolve requests" for any fps the
+  # connected device doesn't list; check `rs-enumerate-devices` if this
+  # ever needs changing for a different camera.
+  fps: 15
+
+paths:
+  dataset_root: dataset
+  captures_dir: dataset/captures
+  labels_dir: dataset/labels
+  patches_dir: dataset/patches
+  master_index: dataset/master_index.jsonl
+
+patch:
+  # cropped sticker patch size saved under patches/<color>/ for later
+  # classifier training. Patches are resized to this fixed size so a
+  # training set has uniform input dimensions.
+  size: 64
