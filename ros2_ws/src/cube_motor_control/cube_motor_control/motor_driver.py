@@ -4,6 +4,7 @@ ExecuteSolve action server (motor_action_server.py) can drive the exact same
 bus protocol a solved move list needs, without duplicating it.
 """
 
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,10 @@ EXTENDED_POSITION_CONTROL_MODE = 4
 MOVE_TOLERANCE_DEGREES = 20
 SETTLE_TIMEOUT_S = 3.0
 SETTLE_POLL_S = 0.02
+
+# Faces on opposite sides of the cube share no mechanism, so their motors can
+# be jogged at the same time without either move interfering with the other.
+OPPOSITE_FACE = {"U": "D", "D": "U", "L": "R", "R": "L", "F": "B", "B": "F"}
 
 
 def load_config():
@@ -118,34 +123,39 @@ class MotorDriver:
             time.sleep(SETTLE_POLL_S)
         return seen_moving is False  # never having moved is caught by the position check
 
-    def jog(self, face, clockwise):
-        """Commands a quarter turn. See _jog_verified/_jog_unverified for
+    def jog(self, face, clockwise, turns=1):
+        """Commands a turn of `turns` quarter-steps (1 = 90deg, 2 = 180deg) as
+        a single goal-position write. See _jog_verified/_jog_unverified for
         the two modes (self.verify_moves)."""
         if self.verify_moves:
-            self._jog_verified(face, clockwise)
+            self._jog_verified(face, clockwise, turns)
         else:
-            self._jog_unverified(face, clockwise)
+            self._jog_unverified(face, clockwise, turns)
 
-    def _jog_unverified(self, face, clockwise):
-        """Commands a quarter turn open-loop: no position reads, no settle
-        wait, no tolerance check. Target is computed from a software-tracked
-        position updated unconditionally after every move, so a slipped or
-        stalled motor is never detected here."""
+    def _jog_unverified(self, face, clockwise, turns=1):
+        """Commands a turn open-loop: no position reads, no settle wait, no
+        tolerance check. Target is computed from a software-tracked position
+        updated unconditionally after every move, so a slipped or stalled
+        motor is never detected here."""
         motor = self.motors[face]
         dxl_id = motor["id"]
 
-        delta = self.step_ticks if clockwise else -self.step_ticks
+        delta = turns * (self.step_ticks if clockwise else -self.step_ticks)
         target = self._assumed_position[dxl_id] + delta
         self._write(dxl_id, ADDR_GOAL_POSITION, target, 4)
         time.sleep(self.unverified_settle_s)
         self._assumed_position[dxl_id] = target
 
+        degrees = turns * 90
         self.logger.info(
-            f"{face} motor (id {dxl_id}) -> {'CW' if clockwise else 'CCW'} 90deg (unverified)"
+            f"{face} motor (id {dxl_id}) -> {'CW' if clockwise else 'CCW'} {degrees}deg (unverified)"
         )
 
-    def _jog_verified(self, face, clockwise):
-        """Commands a quarter turn and verifies the motor actually got there.
+    def _jog_verified(self, face, clockwise, turns=1):
+        """Commands a turn and verifies the motor actually got there in one
+        settle/tolerance check, regardless of whether it's a quarter or half
+        turn - a slip is caught just as reliably either way since the check
+        is against the actual ticks travelled, not an intermediate waypoint.
 
         Raises MoveError if the motor is off by more than MOVE_TOLERANCE_DEGREES,
         since a silently-undershot/overshot move compounds into a jammed cube
@@ -158,7 +168,7 @@ class MotorDriver:
         if before is None:
             raise MoveError(f"{face} motor (id {dxl_id}): could not read starting position")
 
-        delta = self.step_ticks if clockwise else -self.step_ticks
+        delta = turns * (self.step_ticks if clockwise else -self.step_ticks)
         self._write(dxl_id, ADDR_GOAL_POSITION, before + delta, 4)
 
         if not self._wait_until_settled(dxl_id):
@@ -177,27 +187,76 @@ class MotorDriver:
                 f"(tolerance {MOVE_TOLERANCE_DEGREES}deg) - stopping to avoid jamming the cube"
             )
 
-        self.logger.info(f"{face} motor (id {dxl_id}) -> {'CW' if clockwise else 'CCW'} 90deg OK")
+        degrees = turns * 90
+        self.logger.info(f"{face} motor (id {dxl_id}) -> {'CW' if clockwise else 'CCW'} {degrees}deg OK")
 
-    def turn(self, move):
-        """Executes one move in standard cube notation: a face letter
-        (U/R/F/D/L/B) optionally followed by \"'\" (CCW quarter turn) or \"2\"
-        (half turn, done as two verified quarter turns rather than a single
-        180deg command so a slip is still caught after the first 90deg)."""
+    @staticmethod
+    def _parse(move):
         move = move.strip()
         if not move:
             raise MoveError("empty move")
         face, suffix = move[0], move[1:]
+        if suffix == "":
+            return face, True, 1
+        if suffix == "2":
+            return face, True, 2
+        if suffix == "'":
+            return face, False, 1
+        raise MoveError(f"unrecognized move '{move}'")
+
+    def turn(self, move):
+        """Executes one move in standard cube notation: a face letter
+        (U/R/F/D/L/B) optionally followed by \"'\" (CCW quarter turn) or \"2\"
+        (half turn, commanded as a single 180deg move rather than two 90deg
+        moves - halves the settle/verify overhead for double turns)."""
+        face, clockwise, turns = self._parse(move)
         if face not in self.motors:
             raise MoveError(f"unknown face '{face}' in move '{move}'")
-        if suffix in ("", "2"):
-            self.jog(face, clockwise=True)
-            if suffix == "2":
-                self.jog(face, clockwise=True)
-        elif suffix == "'":
-            self.jog(face, clockwise=False)
-        else:
-            raise MoveError(f"unrecognized move '{move}'")
+        self.jog(face, clockwise, turns)
+
+    def turn_group(self, moves):
+        """Executes 2+ moves concurrently and returns a list of per-move
+        results (None on success, the MoveError on failure) the same length
+        as `moves`. Only safe for moves on faces that are mechanically
+        independent (see OPPOSITE_FACE) - the caller is responsible for only
+        grouping such moves together. Runs every move to completion even if
+        one raises, so a caught slip on one motor never leaves the other one
+        commanded mid-turn with nothing waiting on it. Returning per-move
+        results (rather than just raising) lets the caller know exactly
+        which moves in the group actually landed, since one can fail while
+        its partner still succeeds."""
+        if len(moves) == 1:
+            try:
+                self.turn(moves[0])
+                return [None]
+            except MoveError as exc:
+                return [exc]
+
+        parsed = []
+        for move in moves:
+            face, clockwise, turns = self._parse(move)
+            if face not in self.motors:
+                raise MoveError(f"unknown face '{face}' in move '{move}'")
+            parsed.append((face, clockwise, turns))
+
+        errors = [None] * len(parsed)
+
+        def run(i, face, clockwise, turns):
+            try:
+                self.jog(face, clockwise, turns)
+            except MoveError as exc:
+                errors[i] = exc
+
+        threads = [
+            threading.Thread(target=run, args=(i, face, clockwise, turns))
+            for i, (face, clockwise, turns) in enumerate(parsed)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        return errors
 
     def shutdown(self):
         for motor in self.motors.values():

@@ -16,8 +16,26 @@ from rclpy.node import Node
 from std_srvs.srv import Trigger
 
 from cube_motor_control import pending_solve
-from cube_motor_control.motor_driver import MoveError, MotorDriver, load_config
+from cube_motor_control.motor_driver import OPPOSITE_FACE, MoveError, MotorDriver, load_config
 from cube_solver_interfaces.action import ExecuteSolve
+
+
+def _group_moves(moves):
+    """Groups adjacent moves whose faces are on opposite sides of the cube
+    (U/D, L/R, F/B) so they can be jogged at the same time via turn_group -
+    those motors never interact, so grouping them doesn't change the solve's
+    effect, only its wall-clock time. Only ever groups *adjacent* moves, so
+    move order (and therefore correctness) for anything else is unchanged."""
+    groups = []
+    i = 0
+    while i < len(moves):
+        if i + 1 < len(moves) and OPPOSITE_FACE.get(moves[i][0]) == moves[i + 1][0]:
+            groups.append([moves[i], moves[i + 1]])
+            i += 2
+        else:
+            groups.append([moves[i]])
+            i += 1
+    return groups
 
 
 class MotorActionServer(Node):
@@ -47,11 +65,21 @@ class MotorActionServer(Node):
         result = ExecuteSolve.Result()
         pending_solve.save_pending(moves, 0)
 
-        for index, move in enumerate(moves):
-            try:
-                self.driver.turn(move)
-            except MoveError as exc:
-                self.get_logger().error(f"move {index} ('{move}') failed: {exc}")
+        index = 0
+        for group in _group_moves(moves):
+            errors = self.driver.turn_group(group)
+
+            if any(errors):
+                # A group can partially succeed (one face's motor lands fine
+                # while its concurrently-jogged opposite-face partner
+                # slips). pending_solve's resume logic re-runs everything
+                # from `completed` onward as a contiguous block, so rather
+                # than track non-contiguous per-move success, treat the
+                # whole group as not completed - the cost is at most one
+                # already-successful quarter/half turn redone on resume,
+                # which is far safer than the bookkeeping needed to skip it.
+                exc = next(e for e in errors if e is not None)
+                self.get_logger().error(f"move {index} ({group}) failed: {exc}")
                 self.get_logger().error(
                     f"{index}/{len(moves)} moves completed before this failure — "
                     "saved to disk, next solve_and_execute call will resume from here"
@@ -62,11 +90,13 @@ class MotorActionServer(Node):
                 goal_handle.abort()
                 return result
 
-            pending_solve.save_pending(moves, index + 1)
-            feedback = ExecuteSolve.Feedback()
-            feedback.move_index = index
-            feedback.move = move
-            goal_handle.publish_feedback(feedback)
+            index += len(group)
+            pending_solve.save_pending(moves, index)
+            for offset, move in enumerate(group):
+                feedback = ExecuteSolve.Feedback()
+                feedback.move_index = index - len(group) + offset
+                feedback.move = move
+                goal_handle.publish_feedback(feedback)
 
         pending_solve.clear_pending()
         result.success = True
