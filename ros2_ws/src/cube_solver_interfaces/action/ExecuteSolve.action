@@ -1,4 +1,5 @@
 string[] moves
+string facelets_hash
 ---
 bool success
 string message

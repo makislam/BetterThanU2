@@ -1,57 +1,48 @@
-"""End-to-end pipeline: capture two views -> label each -> solve -> drive
-the motors. Each capture/label step is a blocking GUI (cube_vision_tool's
-own PyQt tools, run through its own venv since it isn't part of the ROS 2
-Python environment) - the launch file chains them with OnProcessExit so
-each step starts only once you close the previous window having saved your
-work, then finally brings up the motor action server + solver node and
-calls /cube_solver/solve_and_execute automatically.
+"""End-to-end pipeline: capture two views -> label each -> compare -> solve
+-> drive the motors, all from one persistent GUI (cube_vision_tool's
+hmi_app.py) instead of a chain of separate windows that close between
+steps. Brings up the motor action server + solver node alongside it; the
+HMI's Solve/Execute buttons call their services directly (waiting up to 5s
+for them to come up), so there's no fixed startup delay or auto-call to
+race against.
+
+hmi_app.py needs BOTH cube_vision_tool's own venv (PyQt5, opencv,
+pyrealsense2) AND this sourced ROS 2 workspace (rclpy,
+cube_solver_interfaces, cube_motor_control) importable from the same
+interpreter. That works as long as the venv was NOT created with
+`--system-site-packages` disabled in a way that blocks PYTHONPATH: `ros2
+launch` inherits your shell's environment, so the ROS 2 install's
+PYTHONPATH (from `source install/setup.bash`) is visible to the venv's
+python3 alongside its own site-packages. If hmi_app.py fails to import
+rclpy, that's the thing to check first.
 
 Run: ros2 launch cube_solver cube_pipeline.launch.py
      [vision_tool_dir:=/path/to/cube_vision_tool]
 
-If the automatic solve_and_execute call fails because the nodes weren't up
-yet within the fixed delay below, just re-run it by hand:
-  ros2 service call /cube_solver/solve_and_execute cube_solver_interfaces/srv/SolveCube "{}"
+If you need any individual step standalone, cube_vision_tool's own
+capture_gui.py / label_gui.py / compare_state_gui.py / solve_state.py still
+work exactly as before.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, RegisterEventHandler, TimerAction
-from launch.event_handlers import OnProcessExit
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
-
-# Give the motor action server + solver node this long to come up (Dynamixel
-# bus init, etc.) before the pipeline auto-calls solve_and_execute.
-MOTOR_STARTUP_DELAY_S = 3.0
 
 
 def generate_launch_description():
     vision_tool_dir_arg = DeclareLaunchArgument(
         "vision_tool_dir",
         default_value="/home/makis/workspaces/BetterThanU2/cube_vision_tool",
-        description="Path to cube_vision_tool (its own venv, capture_gui.py, label_gui.py, dataset/).",
+        description="Path to cube_vision_tool (its own venv, hmi_app.py, dataset/).",
     )
     vision_tool_dir = LaunchConfiguration("vision_tool_dir")
     venv_python = PathJoinSubstitution([vision_tool_dir, ".venv", "bin", "python3"])
 
-    capture_step = ExecuteProcess(
-        cmd=[venv_python, "capture_gui.py"],
+    hmi_app = ExecuteProcess(
+        cmd=[venv_python, "hmi_app.py"],
         cwd=vision_tool_dir,
-        name="capture_gui",
-        output="screen",
-    )
-
-    label_upper_step = ExecuteProcess(
-        cmd=[venv_python, "label_latest.py", "--slot", "upper_corner"],
-        cwd=vision_tool_dir,
-        name="label_upper_corner",
-        output="screen",
-    )
-
-    label_lower_step = ExecuteProcess(
-        cmd=[venv_python, "label_latest.py", "--slot", "lower_corner"],
-        cwd=vision_tool_dir,
-        name="label_lower_corner",
+        name="hmi_app",
         output="screen",
     )
 
@@ -71,34 +62,9 @@ def generate_launch_description():
         }],
     )
 
-    solve_and_execute_step = ExecuteProcess(
-        cmd=[
-            "ros2", "service", "call",
-            "/cube_solver/solve_and_execute",
-            "cube_solver_interfaces/srv/SolveCube",
-            "{}",
-        ],
-        name="solve_and_execute",
-        output="screen",
-    )
-
     return LaunchDescription([
         vision_tool_dir_arg,
-        capture_step,
-        RegisterEventHandler(
-            OnProcessExit(target_action=capture_step, on_exit=[label_upper_step])
-        ),
-        RegisterEventHandler(
-            OnProcessExit(target_action=label_upper_step, on_exit=[label_lower_step])
-        ),
-        RegisterEventHandler(
-            OnProcessExit(
-                target_action=label_lower_step,
-                on_exit=[
-                    motor_action_server,
-                    solver_node,
-                    TimerAction(period=MOTOR_STARTUP_DELAY_S, actions=[solve_and_execute_step]),
-                ],
-            )
-        ),
+        motor_action_server,
+        solver_node,
+        hmi_app,
     ])

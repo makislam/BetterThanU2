@@ -13,6 +13,20 @@ palette:
   w: {label: W, rgb: [235, 235, 235]}  # white
   u: {label: U, rgb: [120, 120, 120]}  # unknown / occluded
 
+# A center sticker never moves relative to its own face, so once you know
+# this cube's color scheme these are a fixed fact of the physical cube, not
+# something that needs clicking+keying every single labeling session.
+# label_gui.py auto-fills each face's center cell with this the moment its
+# corners are clicked, so you only ever manually label the 8 non-center
+# cells per face.
+center_colors:
+  U: Y
+  D: W
+  F: R
+  B: O
+  R: G
+  L: B
+
 key_bindings:
   undo: z
   save: s

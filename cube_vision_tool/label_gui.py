@@ -18,7 +18,7 @@ import time
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -229,8 +229,14 @@ class ImageCanvas(QLabel):
             painter.drawText(int(cx) - 5, int(cy) + 5, label)
 
 
-class LabelWindow(QMainWindow):
-    def __init__(self, config, paths, image_path, slot):
+class LabelPanel(QWidget):
+    """The labeling step's UI, as a plain QWidget so it can be embedded as
+    one step of a larger multi-step window (see hmi_app.py) instead of only
+    ever running as its own top-level window."""
+
+    saved = pyqtSignal(dict, str)  # (record, sidecar_path)
+
+    def __init__(self, config, paths, image_path, slot, existing_record=None):
         super().__init__()
         self.config = config
         self.paths = paths
@@ -239,6 +245,7 @@ class LabelWindow(QMainWindow):
         self.palette = config["palette"]
         self.key_to_label = {k: v["label"] for k, v in self.palette.items()}
         self.undo_key = config["key_bindings"]["undo"]
+        self.center_colors = config.get("center_colors", {})
 
         self.image_bgr = cv2.imread(image_path)
         if self.image_bgr is None:
@@ -250,8 +257,42 @@ class LabelWindow(QMainWindow):
         self.selected = None  # (face_idx, cell_idx)
         self.history = []  # stack of (face_idx, cell_idx) for undo
 
-        self.setWindowTitle(f"Label — {os.path.basename(image_path)}")
         self._build_ui()
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        if existing_record is not None:
+            self._load_existing(existing_record)
+
+    def _load_existing(self, record):
+        """Pre-fills face assignments, corner quads, and every cell's label
+        from a previously saved record, so re-opening this step to fix a
+        wrong label means just clicking the bad cells again — not
+        re-selecting faces and re-clicking all 12 corners from scratch."""
+        self.lighting_tag_input.setText(record.get("lighting_tag", ""))
+
+        for face_idx, rec_face in enumerate(record["faces"]):
+            letter = rec_face["face"]
+            if not letter:
+                continue
+            self.face_selectors[face_idx].setCurrentText(letter)
+
+            quad = [tuple(p) for p in rec_face["quad"]]
+            self.faces[face_idx]["quad"] = quad
+            cells = face_grid(quad, grid_size=3)
+            by_row_col = {(c["row"], c["col"]): c for c in rec_face["cells"]}
+            for idx, cell in enumerate(cells):
+                row, col = idx // 3, idx % 3
+                saved_cell = by_row_col.get((row, col))
+                if saved_cell is not None:
+                    cell["label"] = saved_cell["label"]
+                    cell["occluded"] = saved_cell["occluded"]
+            self.faces[face_idx]["cells"] = cells
+
+        self.current_face_idx = 0
+        self.selected = None
+        self.pending_points = []
+        self._check_all_done()
+        self._redraw()
 
     def _build_ui(self):
         self.canvas = ImageCanvas(self.image_bgr, self._on_canvas_click)
@@ -268,6 +309,10 @@ class LabelWindow(QMainWindow):
             self.face_selectors.append(box)
             face_row.addWidget(QLabel(f"Face {i + 1}:"))
             face_row.addWidget(box)
+
+            redo_button = QPushButton("Redo corners")
+            redo_button.clicked.connect(lambda _, idx=i: self._redo_face_corners(idx))
+            face_row.addWidget(redo_button)
 
         self.instructions = QLabel()
 
@@ -308,7 +353,6 @@ class LabelWindow(QMainWindow):
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self._on_save)
 
-        central = QWidget()
         layout = QVBoxLayout()
         layout.addLayout(face_row)
         layout.addWidget(self.instructions)
@@ -317,8 +361,7 @@ class LabelWindow(QMainWindow):
         layout.addWidget(legend)
         layout.addWidget(self.lighting_tag_input)
         layout.addWidget(self.save_button)
-        central.setLayout(layout)
-        self.setCentralWidget(central)
+        self.setLayout(layout)
 
     def _corner_hint(self, face_letter, corner_idx):
         """Generic top-left/top-right/bottom-right/bottom-left instructions
@@ -374,6 +417,37 @@ class LabelWindow(QMainWindow):
         self.faces[face_idx]["face"] = letter
         self._update_instructions()
 
+    def _prefill_center(self, face):
+        """Auto-labels the center cell (row 1, col 1) from config.yaml's
+        center_colors, since a center sticker's color is a fixed fact of
+        this physical cube - not something that needs a click+keypress
+        every session. No-op if this face's letter isn't in that mapping."""
+        label = self.center_colors.get(face["face"])
+        if label is None:
+            return
+        # face["cells"] is face_grid()'s raw row-major list - no "row"/"col"
+        # keys of its own (those only get added at save time in _on_save),
+        # so index 4 (row 1, col 1 in a 3x3 grid) is the center directly.
+        center = face["cells"][4]
+        center["label"] = label
+        center["occluded"] = False
+
+    def _redo_face_corners(self, face_idx):
+        """Resets one face's quad/cells so its 4 corners can be re-clicked -
+        the only way to fix a face whose grid ended up rotated/mirrored
+        (wrong click order), since editing cell colors alone can't move a
+        cell to a different physical corner."""
+        letter = self.faces[face_idx]["face"]
+        if letter is None:
+            return
+        self.faces[face_idx] = {"face": letter, "quad": None, "cells": None}
+        self.current_face_idx = face_idx
+        self.pending_points = []
+        self.selected = None
+        self._check_all_done()
+        self._update_instructions()
+        self._redraw()
+
     def _on_canvas_click(self, x, y):
         face = self.faces[self.current_face_idx]
         if face["face"] is None:
@@ -387,19 +461,27 @@ class LabelWindow(QMainWindow):
                 for cell in face["cells"]:
                     cell["label"] = None
                     cell["occluded"] = False
+                self._prefill_center(face)
                 self.pending_points = []
                 self.selected = None
             self._update_instructions()
             self._redraw()
             return
 
-        # Labeling mode: find which cell polygon contains the click.
-        for cell_idx, cell in enumerate(face["cells"]):
-            polygon = np.array(cell["polygon"], dtype=np.float32)
-            if cv2.pointPolygonTest(polygon, (x, y), False) >= 0:
-                self.selected = (self.current_face_idx, cell_idx)
-                self._redraw()
-                return
+        # Labeling mode: find which cell polygon contains the click, across
+        # every face whose corners are already defined - not just the
+        # "current" face, so a wrong label on an earlier face can be fixed
+        # without needing to navigate back to it first.
+        for face_idx, other_face in enumerate(self.faces):
+            if other_face["cells"] is None:
+                continue
+            for cell_idx, cell in enumerate(other_face["cells"]):
+                polygon = np.array(cell["polygon"], dtype=np.float32)
+                if cv2.pointPolygonTest(polygon, (x, y), False) >= 0:
+                    self.selected = (face_idx, cell_idx)
+                    self.current_face_idx = face_idx
+                    self._redraw()
+                    return
 
     def keyPressEvent(self, event):
         key = event.text().lower()
@@ -510,6 +592,19 @@ class LabelWindow(QMainWindow):
             self, "Saved",
             f"Saved {sidecar_path}\nWrote {patch_count} sticker patches.",
         )
+        self.saved.emit(record, sidecar_path)
+
+
+class LabelWindow(QMainWindow):
+    """Standalone top-level window wrapping LabelPanel, for running this
+    step on its own (python3 label_gui.py) rather than embedded in the
+    combined HMI."""
+
+    def __init__(self, config, paths, image_path, slot, existing_record=None):
+        super().__init__()
+        self.setWindowTitle(f"Label — {os.path.basename(image_path)}")
+        self.panel = LabelPanel(config, paths, image_path, slot, existing_record)
+        self.setCentralWidget(self.panel)
 
 
 def main():

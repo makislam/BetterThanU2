@@ -62,8 +62,9 @@ class MotorActionServer(Node):
 
     def _execute(self, goal_handle):
         moves = goal_handle.request.moves
+        facelets_hash = goal_handle.request.facelets_hash or None
         result = ExecuteSolve.Result()
-        pending_solve.save_pending(moves, 0)
+        pending_solve.save_pending(moves, 0, facelets_hash)
 
         index = 0
         for group in _group_moves(moves):
@@ -91,7 +92,7 @@ class MotorActionServer(Node):
                 return result
 
             index += len(group)
-            pending_solve.save_pending(moves, index)
+            pending_solve.save_pending(moves, index, facelets_hash)
             for offset, move in enumerate(group):
                 feedback = ExecuteSolve.Feedback()
                 feedback.move_index = index - len(group) + offset

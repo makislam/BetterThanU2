@@ -18,6 +18,7 @@ _latest_labeled_facelets) instead of requiring the caller to pass a
 54-character string by hand.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -140,21 +141,35 @@ class CubeSolverNode(Node):
         # spinning". `await`ing the futures instead lets the *existing* spin
         # keep servicing the action client's callbacks while this coroutine
         # is suspended, with no nested spin at all.
+        try:
+            facelets = self._resolve_facelets(request)
+        except (RuntimeError, ValueError) as exc:
+            response.success = False
+            response.message = str(exc)
+            response.moves = []
+            return response
+        facelets_hash = hashlib.sha256(facelets.encode()).hexdigest()
+
         pending = pending_solve.load_pending()
-        if pending is not None:
+        if pending is not None and pending["facelets_hash"] == facelets_hash:
             moves = pending["moves"][pending["completed"]:]
             self.get_logger().info(
                 f"resuming pending solve: {pending['completed']}/{len(pending['moves'])} "
-                f"moves already done, {len(moves)} remaining — not re-solving from vision"
+                f"moves already done, {len(moves)} remaining — cube's facelets match "
+                "the state that plan was computed for, not re-solving"
             )
         else:
-            try:
-                moves = self._solve(request)
-            except (RuntimeError, ValueError) as exc:
-                response.success = False
-                response.message = str(exc)
-                response.moves = []
-                return response
+            if pending is not None:
+                self.get_logger().warning(
+                    "discarding stale pending solve: current facelets don't match "
+                    "the state it was planned for (cube moved, re-labeled, or an "
+                    "unverified move landed anyway) — re-solving from scratch"
+                )
+                pending_solve.clear_pending()
+            algorithm = request.algorithm or self.get_parameter("algorithm").value
+            backend = get_backend(algorithm)
+            moves = backend.solve(facelets)
+            self.get_logger().info(f"[{algorithm}] solved {facelets} -> {' '.join(moves)}")
 
         if not self._action_client.wait_for_server(timeout_sec=5.0):
             response.success = False
@@ -164,6 +179,7 @@ class CubeSolverNode(Node):
 
         goal = ExecuteSolve.Goal()
         goal.moves = moves
+        goal.facelets_hash = facelets_hash
         goal_handle = await self._action_client.send_goal_async(goal)
         if goal_handle is None or not goal_handle.accepted:
             response.success = False

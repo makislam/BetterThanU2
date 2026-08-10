@@ -25,6 +25,7 @@ setup(
         "console_scripts": [
             "keyboard_motor_control = cube_motor_control.keyboard_motor_control:main",
             "motor_action_server = cube_motor_control.motor_action_server:main",
+            "scramble_cube = cube_motor_control.scramble_cube:main",
         ],
     },
 )

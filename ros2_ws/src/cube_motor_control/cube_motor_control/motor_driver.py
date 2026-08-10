@@ -60,6 +60,15 @@ class MotorDriver:
         self.unverified_settle_s = config.get("unverified_move_settle_s", 0.4)
         self._assumed_position = {}
 
+        # dynamixel_sdk's PortHandler is NOT thread-safe: it guards each
+        # transaction with a single is_using flag, so two threads writing at
+        # once make one of them fail with "Port is in use!". turn_group()
+        # deliberately jogs opposite faces from two threads, so every bus
+        # transaction has to hold this lock. It's taken per-transaction (not
+        # around a whole jog) so the two motors still physically turn at the
+        # same time - only the few-byte packets are serialized.
+        self._bus_lock = threading.Lock()
+
         self.port = PortHandler(config["port"])
         self.packet = PacketHandler(str(config["protocol_version"]))
         if not self.port.openPort():
@@ -82,19 +91,38 @@ class MotorDriver:
                 position = self._read_present_position(dxl_id)
                 self._assumed_position[dxl_id] = position if position is not None else 0
 
-    def _write(self, dxl_id, address, value, size):
+    def _write(self, dxl_id, address, value, size, retries=3):
+        """Returns True if the write actually landed. Callers commanding a
+        MOVE must check this and treat False as a failed move: a dropped
+        goal-position write means the motor never turned, and recording it
+        as done anyway is what silently leaves a cube a few moves short of
+        solved."""
         writers = {1: self.packet.write1ByteTxRx, 2: self.packet.write2ByteTxRx, 4: self.packet.write4ByteTxRx}
-        result, error = writers[size](self.port, dxl_id, address, value)
-        if result != COMM_SUCCESS:
-            self.logger.error(f"id {dxl_id} addr {address}: {self.packet.getTxRxResult(result)}")
-        elif error != 0:
-            self.logger.error(f"id {dxl_id} addr {address}: {self.packet.getRxPacketError(error)}")
+        for attempt in range(retries):
+            with self._bus_lock:
+                result, error = writers[size](self.port, dxl_id, address, value)
+            if result == COMM_SUCCESS and error == 0:
+                return True
+            if result != COMM_SUCCESS:
+                message = self.packet.getTxRxResult(result)
+            else:
+                message = self.packet.getRxPacketError(error)
+            self.logger.error(
+                f"id {dxl_id} addr {address}: {message}"
+                + (f" (attempt {attempt + 1}/{retries}, retrying)" if attempt < retries - 1 else "")
+            )
+            if attempt < retries - 1:
+                time.sleep(SETTLE_POLL_S)
+        return False
 
     def _read_present_position(self, dxl_id, retries=3):
         # A single dropped status packet on a fast bus shouldn't abort an
         # otherwise-safe solve, so retry a few times before giving up.
         for attempt in range(retries):
-            position, result, error = self.packet.read4ByteTxRx(self.port, dxl_id, ADDR_PRESENT_POSITION)
+            with self._bus_lock:
+                position, result, error = self.packet.read4ByteTxRx(
+                    self.port, dxl_id, ADDR_PRESENT_POSITION
+                )
             if result == COMM_SUCCESS and error == 0:
                 return position
             if attempt < retries - 1:
@@ -103,7 +131,8 @@ class MotorDriver:
         return None
 
     def _read_moving(self, dxl_id):
-        moving, result, error = self.packet.read1ByteTxRx(self.port, dxl_id, ADDR_MOVING)
+        with self._bus_lock:
+            moving, result, error = self.packet.read1ByteTxRx(self.port, dxl_id, ADDR_MOVING)
         if result != COMM_SUCCESS or error != 0:
             return None
         return bool(moving)
@@ -142,7 +171,15 @@ class MotorDriver:
 
         delta = turns * (self.step_ticks if clockwise else -self.step_ticks)
         target = self._assumed_position[dxl_id] + delta
-        self._write(dxl_id, ADDR_GOAL_POSITION, target, 4)
+        if not self._write(dxl_id, ADDR_GOAL_POSITION, target, 4):
+            # The motor never got the goal, so it didn't turn. Leave
+            # _assumed_position alone (advancing it here would desync the
+            # software-tracked position from the real one and corrupt every
+            # later relative move) and fail loudly instead of logging a move
+            # that never happened.
+            raise MoveError(
+                f"{face} motor (id {dxl_id}): goal-position write failed, move not commanded"
+            )
         time.sleep(self.unverified_settle_s)
         self._assumed_position[dxl_id] = target
 
@@ -169,7 +206,10 @@ class MotorDriver:
             raise MoveError(f"{face} motor (id {dxl_id}): could not read starting position")
 
         delta = turns * (self.step_ticks if clockwise else -self.step_ticks)
-        self._write(dxl_id, ADDR_GOAL_POSITION, before + delta, 4)
+        if not self._write(dxl_id, ADDR_GOAL_POSITION, before + delta, 4):
+            raise MoveError(
+                f"{face} motor (id {dxl_id}): goal-position write failed, move not commanded"
+            )
 
         if not self._wait_until_settled(dxl_id):
             raise MoveError(f"{face} motor (id {dxl_id}): did not settle within {SETTLE_TIMEOUT_S}s")

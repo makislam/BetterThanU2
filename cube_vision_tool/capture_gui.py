@@ -16,7 +16,7 @@ import sys
 import time
 
 import cv2
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -90,12 +90,17 @@ class SlotPanel(QGroupBox):
         self.retake_button.setEnabled(False)
 
 
-class CaptureWindow(QMainWindow):
+class CapturePanel(QWidget):
+    """The capture step's UI and camera lifecycle, as a plain QWidget so it
+    can be embedded as one step of a larger multi-step window (see
+    hmi_app.py) instead of only ever running as its own top-level window."""
+
+    state_changed = pyqtSignal()
+
     def __init__(self, config, paths):
         super().__init__()
         self.config = config
         self.paths = paths
-        self.setWindowTitle("Cube Capture")
 
         capture_cfg = config["capture"]
         self.camera = Camera(capture_cfg["width"], capture_cfg["height"], capture_cfg["fps"])
@@ -130,14 +135,12 @@ class CaptureWindow(QMainWindow):
         lighting_row.addWidget(QLabel("Lighting tag:"))
         lighting_row.addWidget(self.lighting_tag_input)
 
-        central = QWidget()
         layout = QVBoxLayout()
         layout.addWidget(self.viewfinder, alignment=Qt.AlignCenter)
         layout.addLayout(top_controls)
         layout.addLayout(lighting_row)
         layout.addLayout(slots_layout)
-        central.setLayout(layout)
-        self.setCentralWidget(central)
+        self.setLayout(layout)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._on_frame_tick)
@@ -185,13 +188,42 @@ class CaptureWindow(QMainWindow):
             "timestamp": timestamp,
             "lighting_tag": self.lighting_tag_input.text().strip(),
         }
+        self.state_changed.emit()
 
     def _on_retake(self, panel):
         panel.mark_uncaptured()
         panel.capture_meta = None
+        self.state_changed.emit()
+
+    def all_captured(self):
+        return all(panel.captured_path is not None for panel in self.slots.values())
+
+    def captures(self):
+        """{slot_name: {"path": ..., **capture_meta}} for every captured slot."""
+        return {
+            slot_name: {"path": panel.captured_path, **(panel.capture_meta or {})}
+            for slot_name, panel in self.slots.items()
+            if panel.captured_path is not None
+        }
+
+    def shutdown(self):
+        self.timer.stop()
+        self.camera.stop()
+
+
+class CaptureWindow(QMainWindow):
+    """Standalone top-level window wrapping CapturePanel, for running this
+    step on its own (python3 capture_gui.py) rather than embedded in the
+    combined HMI."""
+
+    def __init__(self, config, paths):
+        super().__init__()
+        self.setWindowTitle("Cube Capture")
+        self.panel = CapturePanel(config, paths)
+        self.setCentralWidget(self.panel)
 
     def closeEvent(self, event):
-        self.camera.stop()
+        self.panel.shutdown()
         super().closeEvent(event)
 
 
